@@ -1,6 +1,6 @@
 /* Script overview:
  * Derives EVCC control-pilot states from processed WiCAN charging data.
- * Tracks connection, plug, lock, and charging-mode changes under one state root.
+ * Tracks plug, lock, and charging-mode changes under one state root.
  * Publishes normalized CP state codes and human-readable descriptions.
  */
 
@@ -18,7 +18,6 @@ const CONFIG = {
  * ===================================*/
 
 const STATE_IDS = {
-    online: `${CONFIG.stateRoot}.online`,
     chargeMode: `${CONFIG.stateRoot}.charging.mode`,
     plugged: `${CONFIG.stateRoot}.charging.plugged`,
     locked: `${CONFIG.stateRoot}.charging.locked`,
@@ -32,7 +31,6 @@ const STATE_IDS = {
  * ===================================*/
 
 let cpUpdateTimer = null;
-let wicanOnline = false;
 let chargeMode = null;
 let plugged = null;
 let locked = null;
@@ -99,32 +97,6 @@ async function main() {
 function subscribeStates() {
     on(
         {
-            id: STATE_IDS.online,
-            change: 'any'
-        },
-        async obj => {
-            try {
-                wicanOnline = parseOnlineStatus(obj.state.val);
-
-                // Preserve the last valid CP state while WiCAN is offline.
-                if (wicanOnline) {
-                    await updateCpState();
-                } else {
-                    logDebug(
-                        'WiCAN offline – letzter CP-State bleibt erhalten'
-                    );
-                }
-            } catch (error) {
-                log(
-                    `WiCAN-Status konnte nicht verarbeitet werden: ${error.message}`,
-                    'error'
-                );
-            }
-        }
-    );
-
-    on(
-        {
             id: STATE_IDS.chargeMode,
             change: 'any'
         },
@@ -153,7 +125,7 @@ function subscribeStates() {
         },
         async obj => {
             try {
-                plugged = parseBoolean(obj.state.val);
+                plugged = obj.state.val;
                 await updateCpState();
             } catch (error) {
                 log(
@@ -171,7 +143,7 @@ function subscribeStates() {
         },
         async obj => {
             try {
-                locked = parseBoolean(obj.state.val);
+                locked = obj.state.val;
                 await updateCpState();
             } catch (error) {
                 log(
@@ -186,18 +158,14 @@ function subscribeStates() {
 // Load all input values once during startup.
 async function initializeValues() {
     const [
-        statusState,
         chargeModeState,
         pluggedState,
         lockedState
     ] = await Promise.all([
-        getStateAsync(STATE_IDS.online),
         getStateAsync(STATE_IDS.chargeMode),
         getStateAsync(STATE_IDS.plugged),
         getStateAsync(STATE_IDS.locked)
     ]);
-
-    wicanOnline = parseOnlineStatus(statusState?.val);
 
     const modeValue = Number(chargeModeState?.val);
 
@@ -205,8 +173,8 @@ async function initializeValues() {
         ? modeValue
         : null;
 
-    plugged = parseBoolean(pluggedState?.val);
-    locked = parseBoolean(lockedState?.val);
+    plugged = pluggedState?.val ?? null;
+    locked = lockedState?.val ?? null;
 
     await updateCpState();
 }
@@ -226,13 +194,6 @@ async function initializeValues() {
  */
 
 async function updateCpState() {
-
-    // An offline WiCAN does not prove that the vehicle was disconnected,
-    // so retain the last valid CP state.
-    if (!wicanOnline) {
-        return;
-    }
-
     // Wait until both socket-state inputs are known.
     if (plugged === null || locked === null) {
         logDebug(
@@ -284,89 +245,12 @@ async function updateCpState() {
 
     logDebug(
         `EVCC CP-State: ${cpState} – ${text} ` +
-        `(online=${wicanOnline}, ` +
-        `plugged=${plugged}, ` +
+        `(plugged=${plugged}, ` +
         `locked=${locked}, ` +
         `mode=${chargeMode})`
     );
 }
 
-
-/* ===================================
- *            Value Parsing
- * ===================================*/
-
-// Normalize the supported WiCAN online-state representations.
-function parseOnlineStatus(rawValue) {
-    if (rawValue === null || rawValue === undefined) {
-        return false;
-    }
-
-    if (typeof rawValue === 'object') {
-        return (
-            String(rawValue?.status)
-                .trim()
-                .toLowerCase() === 'online'
-        );
-    }
-
-    const text = String(rawValue).trim();
-
-    if (text.toLowerCase() === 'online') {
-        return true;
-    }
-
-    try {
-        const parsed = JSON.parse(text);
-
-        return (
-            String(parsed?.status)
-                .trim()
-                .toLowerCase() === 'online'
-        );
-    } catch {
-        return false;
-    }
-}
-
-// Normalize boolean state values received in different representations.
-function parseBoolean(value) {
-    if (value === true || value === 1) {
-        return true;
-    }
-
-    if (value === false || value === 0) {
-        return false;
-    }
-
-    if (typeof value !== 'string') {
-        return null;
-    }
-
-    const normalized = value
-        .trim()
-        .toLowerCase();
-
-    if (
-        normalized === 'true' ||
-        normalized === '1' ||
-        normalized === 'on' ||
-        normalized === 'yes'
-    ) {
-        return true;
-    }
-
-    if (
-        normalized === 'false' ||
-        normalized === '0' ||
-        normalized === 'off' ||
-        normalized === 'no'
-    ) {
-        return false;
-    }
-
-    return null;
-}
 
 // Return the human-readable description for an EVCC CP state code.
 function getCpStateText(state) {
