@@ -142,3 +142,56 @@ MQTT:      MY_CAR/charging/cpState
 ```
 
 With the default script settings, existing values are published when the MQTT script starts, later changes are published automatically, and messages use the MQTT retain flag. Additional states placed below the configured `stateRoot` are mirrored as well.
+
+## Configure EVCC
+
+1. In EVCC, open **Configuration > Integrations**, enable MQTT, and connect EVCC to the broker used by `04_evcc_mqtt_publish.js` if this has not already been configured.
+2. Open **Configuration > Vehicles**, add a vehicle, and select **Custom device**.
+3. Use the following configuration as a starting point:
+
+```yaml
+title: e-up
+icon: car
+capacity: 32 # kWh
+
+## required attributes
+
+soc: # state of charge
+  source: mqtt
+  topic: MY_CAR/SOC
+
+## optional attributes (read-only)
+
+# limitsoc: # in-vehicle charge limit
+#   source: const
+#   value: 80 # %
+status: # status [A..F]
+  source: mqtt
+  topic: MY_CAR/charging/cpState
+# range: # range
+#   source: const
+#   value: 123 # km
+# climater: # climate active
+#   source: const
+#   value: true
+# getmaxcurrent: # max charge current
+#   source: const
+#   value: 16.0 # A
+# finishtime: # finish time (RFC3339)
+#   source: const
+#   value: "2030-01-01T00:00:00Z"
+
+## optional attributes (writeable)
+
+# wakeup: # wake up vehicle
+#   source: js
+#   script: console.log(wakeup);
+# chargeenable: # start/stop charging
+#   source: js
+#   script: console.log(chargeenable);
+# maxcurrent: # set max charge current
+#   source: js
+#   script: console.log(maxcurrent);
+```
+
+4. Adjust the `soc` and `status` topics according to your configured `topicRoot` in `04_evcc_mqtt_publish.js`. Save the vehicle configuration and restart EVCC. The e-Up should then report its state of charge and connection status through MQTT.
