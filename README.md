@@ -1,5 +1,5 @@
-# ioBroker-eup-obd-mqtt
-ioBroker JavaScript scripts for retrieving and processing VW e-up! charging data via OBD (tested with "WiCAN PRO" by MeatPi eclectronics) and publishing it over MQTT.
+# iobroker-eup-wican
+ioBroker JavaScript scripts for retrieving and processing VW e-up! charging data via OBD (tested with "WiCAN PRO" by MeatPi electronics) and publishing it over MQTT.
 
 ## Use at your very own risk!
 
@@ -56,7 +56,7 @@ For a simple installation, copy the three core files from `scripts/` into the io
 - `02_wican_decoder.js`
 - `03_evcc_cp_state.js`
 
-To publish the resulting states to another MQTT broker, copy `04_evcc_mqtt_publish.js` as well.
+The three core scripts handle polling and decoding. To expose their decoded vehicle states over MQTT, copy `04_evcc_mqtt_publish.js` as well. Its primary purpose is to make this data available to EVCC, using either the same broker as WiCAN or a separate broker.
 
 In each copied script, edit only the installation-specific fields between these markers:
 
