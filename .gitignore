@@ -1,0 +1,10 @@
+# Generated scripts contain the effective local configuration.
+/built/
+
+# Keep only the neutral, documented example configuration in Git.
+/config/*
+!/config/example.cjs
+
+# local file naming conventions.
+.agents
+.temp
