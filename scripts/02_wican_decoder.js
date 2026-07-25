@@ -23,7 +23,8 @@ const CONFIG = {
         errors: true // Log error messages.
     },
 
-    isoTpTimeoutMs: 3000 // Timeout for incomplete ISO-TP responses.
+    isoTpTimeoutMs: 3000, // Timeout for incomplete ISO-TP responses.
+    stateRefreshIntervalMs: 60_000 // Refresh unchanged output states at most once per minute.
 };
 
 
@@ -182,7 +183,12 @@ const STATES = {
         type: 'number',
         role: 'value.temperature',
         unit: '°C',
-        def: 0
+        def: 0,
+        writePolicy: {
+            minDelta: 0.5,
+            minWriteIntervalMs: 30_000,
+            immediateDelta: 1.0
+        }
     },
 
     chargeSocketTemperatureDc: {
@@ -191,7 +197,12 @@ const STATES = {
         type: 'number',
         role: 'value.temperature',
         unit: '°C',
-        def: 0
+        def: 0,
+        writePolicy: {
+            minDelta: 0.5,
+            minWriteIntervalMs: 30_000,
+            immediateDelta: 1.0
+        }
     },
 
     energyChargedAh: {
@@ -273,6 +284,7 @@ const STATES = {
  * ===================================*/
 
 const isoTpSessions = new Map();
+const stateWriteCache = new Map();
 
 let lastCellVoltageMax = null;
 let lastCellVoltageMin = null;
@@ -330,10 +342,9 @@ async function initializeStatus() {
     const status = await getStateAsync(CONFIG.statusState);
 
     if (!status) {
-        await setStateAsync(
+        await writeStateThrottled(
             getStateId(STATES.online.id),
-            false,
-            true
+            false
         );
 
         return;
@@ -346,16 +357,17 @@ async function initializeStatus() {
 async function updateOnlineStatus(rawValue) {
     const online = parseOnlineStatus(rawValue);
 
-    await setStateAsync(
+    const writeReason = await writeStateThrottled(
         getStateId(STATES.online.id),
-        online,
-        true
+        online
     );
 
-    logMessage(
-        'values',
-        `${getStateId(STATES.online.id)} = ${online}`
-    );
+    if (writeReason === 'change') {
+        logMessage(
+            'values',
+            `${getStateId(STATES.online.id)} = ${online}`
+        );
+    }
 }
 
 // Subscribe to raw CAN messages received through the WiCAN MQTT state.
@@ -801,12 +813,15 @@ async function processBatteryManagementDid(did, data) {
             'value.voltage'
         );
 
-        await setStateAsync(fullId, voltage, true);
+        const writeReason = await writeStateThrottled(fullId, voltage);
+        await touchLastUpdate();
 
-        logMessage(
-            'values',
-            `${fullId} = ${voltage} V`
-        );
+        if (writeReason === 'change') {
+            logMessage(
+                'values',
+                `${fullId} = ${voltage} V`
+            );
+        }
 
         return;
     }
@@ -1184,18 +1199,106 @@ async function updateValue(stateKey, value) {
 
     const fullId = getStateId(definition.id);
 
-    await setStateAsync(fullId, value, true);
-    await setStateAsync(
+    const writeReason = await writeStateThrottled(
+        fullId,
+        value,
+        definition.writePolicy
+    );
+    await touchLastUpdate();
+
+    if (writeReason === 'change') {
+        logMessage(
+            'values',
+            `${fullId} = ${value}` +
+            (definition.unit ? ` ${definition.unit}` : '')
+        );
+    }
+}
+
+// Refresh the decoder heartbeat at most once per configured interval.
+async function touchLastUpdate() {
+    await writeStateThrottled(
         getStateId(STATES.lastUpdate.id),
         Date.now(),
-        true
+        {
+            intervalOnly: true
+        }
     );
+}
 
-    logMessage(
-        'values',
-        `${fullId} = ${value}` +
-        (definition.unit ? ` ${definition.unit}` : '')
-    );
+// Apply per-state write policies and periodically refresh output states.
+async function writeStateThrottled(id, value, options = {}) {
+    const {
+        intervalOnly = false,
+        minDelta = 0,
+        minWriteIntervalMs = 0,
+        immediateDelta = null
+    } = options;
+
+    const now = Date.now();
+    const previous = stateWriteCache.get(id);
+
+    const valueChanged =
+        previous === undefined ||
+        !Object.is(previous.value, value);
+
+    const numericDelta =
+        previous !== undefined &&
+        typeof previous.value === 'number' &&
+        Number.isFinite(previous.value) &&
+        typeof value === 'number' &&
+        Number.isFinite(value)
+            ? Math.abs(value - previous.value)
+            : null;
+
+    const materialChange =
+        valueChanged &&
+        (
+            numericDelta === null ||
+            numericDelta >= minDelta
+        );
+
+    const elapsedSinceWrite =
+        previous === undefined
+            ? Infinity
+            : now - previous.writtenAt;
+
+    const refreshDue =
+        previous === undefined ||
+        elapsedSinceWrite >= CONFIG.stateRefreshIntervalMs;
+
+    const minimumIntervalElapsed =
+        elapsedSinceWrite >= minWriteIntervalMs;
+
+    const immediateChange =
+        immediateDelta !== null &&
+        numericDelta !== null &&
+        numericDelta >= immediateDelta;
+
+    let writeReason = null;
+
+    if (
+        !intervalOnly &&
+        materialChange &&
+        (minimumIntervalElapsed || immediateChange)
+    ) {
+        writeReason = 'change';
+    } else if (refreshDue) {
+        writeReason = 'refresh';
+    }
+
+    if (writeReason === null) {
+        return null;
+    }
+
+    await setStateAsync(id, value, true);
+
+    stateWriteCache.set(id, {
+        value,
+        writtenAt: now
+    });
+
+    return writeReason;
 }
 
 // Resolve a relative state ID below the configured state root.
